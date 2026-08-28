@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%276%27 fill=%27%23e8f5e9%27/%3E%3Ccircle cx=%2716%27 cy=%2712%27 r=%275%27 fill=%27%23f9a825%27/%3E%3Cpath d=%27M6 26c0-6 5-9 10-9s10 3 10 9z%27 fill=%27%232e7d32%27/%3E%3C/svg%3E">
+<title>Nachweis prüfen — TerraSol</title>
+<style>
+:root{
+  --gruen:#2e7d32; --gruen-hell:#e8f5e9; --gruen-rand:#a5d6a7;
+  --rot:#c62828; --rot-hell:#ffebee; --rot-rand:#ef9a9a;
+  --gelb:#f9a825; --gelb-hell:#fffde7; --gelb-rand:#ffe082;
+  --text:#1b2318; --grau:#5f6b5c; --grau2:#8a958a;
+  --rand:#dde3dc; --feld:#fff; --bg:#f4f7f2;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);
+  font:16px/1.6 "Segoe UI",-apple-system,system-ui,sans-serif;
+  min-height:100vh;display:flex;flex-direction:column;align-items:center;
+  padding:40px 20px}
+.blatt{width:100%;max-width:680px}
+
+.kopf{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+.kopf img{width:48px;height:48px;border-radius:8px}
+.kopf h1{font-size:24px;font-weight:600;line-height:1.2}
+.kopf span{display:block;font-size:14px;color:var(--grau);font-weight:400}
+.lead{color:var(--grau);margin:14px 0 26px}
+
+.ablage{
+  /* Ein <label> ist von Haus aus inline. Polster wirkt dort nicht auf die
+     Zeilenhöhe - die Ablagefläche legt sich sonst über Text darüber und
+     darunter. Sichtbar nur im Bild, nicht im Test. */
+  display:block;
+  background:var(--feld);border:2px dashed var(--rand);border-radius:12px;
+  padding:44px 24px;text-align:center;cursor:pointer;transition:.15s;
+}
+.ablage:hover,.ablage.drueber{border-color:var(--gruen);background:var(--gruen-hell)}
+.ablage strong{display:block;font-size:17px;margin-bottom:6px}
+.ablage em{font-style:normal;color:var(--grau);font-size:14px}
+.ablage input{display:none}
+
+.schutz{
+  display:flex;gap:10px;align-items:flex-start;
+  background:var(--feld);border:1px solid var(--rand);border-radius:8px;
+  padding:12px 14px;margin-top:14px;font-size:13px;color:var(--grau);
+}
+.schutz svg{flex:0 0 auto;margin-top:2px}
+
+.ergebnis{margin-top:24px;border-radius:12px;padding:22px 24px;display:none}
+.ergebnis.zeigen{display:block}
+.ergebnis.gruen{background:var(--gruen-hell);border:1px solid var(--gruen-rand)}
+.ergebnis.rot{background:var(--rot-hell);border:1px solid var(--rot-rand)}
+.ergebnis.gelb{background:var(--gelb-hell);border:1px solid var(--gelb-rand)}
+.ergebnis h2{font-size:19px;margin-bottom:8px;display:flex;align-items:center;gap:10px}
+.ergebnis.gruen h2{color:var(--gruen)}
+.ergebnis.rot h2{color:var(--rot)}
+.ergebnis.gelb h2{color:#b26a00}
+.ergebnis p{font-size:15px;color:var(--text);margin-bottom:4px}
+
+.daten{margin-top:16px;border-top:1px solid rgba(0,0,0,.08);padding-top:14px;
+  display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:13px}
+.daten dt{color:var(--grau)}
+.daten dd{font-family:Consolas,"SF Mono",monospace;word-break:break-all}
+.daten dd a{color:var(--gruen)}
+
+.lauf{display:none;margin-top:24px;text-align:center;color:var(--grau);font-size:14px}
+.lauf.zeigen{display:block}
+.punkte::after{content:'';animation:p 1.2s steps(4,end) infinite}
+@keyframes p{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+
+.fuss{margin-top:34px;padding-top:16px;border-top:1px solid var(--rand);
+  font-size:13px;color:var(--grau2);line-height:1.7}
+.fuss code{background:#eef2ec;padding:1px 5px;border-radius:3px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="blatt">
+
+  <div class="kopf">
+    <img src="/trra-64.png" alt="" onerror="this.style.display='none'">
+    <h1>Nachweis prüfen
+      <span>TerraSol — unabhängige CO₂-Verifizierung</span></h1>
+  </div>
+
+  <p class="lead">
+    Ziehen Sie ein Dokument hierher. Es wird geprüft, ob genau dieses Dokument
+    bei uns registriert und seither <strong>unverändert</strong> ist — belegt
+    durch einen Eintrag auf der Solana-Blockchain.
+  </p>
+
+  <label class="ablage" id="ablage">
+    <strong>Dokument hierher ziehen</strong>
+    <em>oder klicken zum Auswählen — beliebiges Format, beliebige Grösse</em>
+    <input type="file" id="datei">
+  </label>
+
+  <div class="schutz">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5f6b5c" stroke-width="2">
+      <path d="M12 2 4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6z"/>
+    </svg>
+    <div>
+      <strong>Ihr Dokument verlässt diesen Computer nicht.</strong>
+      Der Fingerabdruck wird im Browser berechnet; übertragen werden nur
+      64 Zeichen — aus ihnen lässt sich das Dokument nicht zurückgewinnen.
+    </div>
+  </div>
+
+  <div class="lauf" id="lauf"><span class="punkte">Fingerabdruck wird berechnet</span></div>
+
+  <div class="ergebnis" id="ergebnis">
+    <h2 id="titel"></h2>
+    <p id="text"></p>
+    <dl class="daten" id="daten"></dl>
+  </div>
+
+  <p class="fuss">
+    Geprüft wird ein <code>SHA-256</code>-Fingerabdruck gegen einen Eintrag in
+    der Solana-Blockchain. Ein einziges geändertes Byte ergibt einen völlig
+    anderen Fingerabdruck — deshalb lässt sich ein registriertes Dokument
+    nachträglich nicht unbemerkt ändern.
+    <br><br>
+    Auf der Kette steht ausschliesslich der Fingerabdruck. Weder Ihr Name noch
+    Seriennummern noch Projektdaten werden dort veröffentlicht.
+  </p>
+
+</div>
+
+<script>
+const ablage = document.getElementById('ablage');
+const datei  = document.getElementById('datei');
+const lauf   = document.getElementById('lauf');
+const kasten = document.getElementById('ergebnis');
+const titel  = document.getElementById('titel');
+const text   = document.getElementById('text');
+const daten  = document.getElementById('daten');
+
+['dragenter','dragover'].forEach(e =>
+  ablage.addEventListener(e, ev => { ev.preventDefault(); ablage.classList.add('drueber'); }));
+['dragleave','drop'].forEach(e =>
+  ablage.addEventListener(e, ev => { ev.preventDefault(); ablage.classList.remove('drueber'); }));
+ablage.addEventListener('drop', ev => {
+  const f = ev.dataTransfer.files[0];
+  if (f) pruefen(f);
+});
+datei.addEventListener('change', () => { if (datei.files[0]) pruefen(datei.files[0]); });
+
+/** SHA-256 im Browser. Das Dokument bleibt hier. */
+async function fingerabdruck(file) {
+  const puffer = await file.arrayBuffer();
+  const roh = await crypto.subtle.digest('SHA-256', puffer);
+  return Array.from(new Uint8Array(roh))
+    .map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function zeigen(art, kopf, inhalt, felder) {
+  lauf.classList.remove('zeigen');
+  kasten.className = 'ergebnis zeigen ' + art;
+  titel.textContent = kopf;
+  text.textContent = inhalt;
+  daten.innerHTML = felder.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+}
+
+async function pruefen(file) {
+  kasten.classList.remove('zeigen');
+  lauf.classList.add('zeigen');
+
+  const hash = await fingerabdruck(file);
+  let a;
+  try {
+    a = await (await fetch('/api/pruefen?hash=' + hash)).json();
+  } catch (e) {
+    zeigen('gelb', '⚠ Prüfung nicht möglich',
+      'Der Prüfdienst ist nicht erreichbar. Bitte später erneut versuchen.',
+      [['Fingerabdruck', hash]]);
+    return;
+  }
+
+  const groesse = file.size < 1024 ? file.size + ' Bytes'
+    : file.size < 1048576 ? (file.size / 1024).toFixed(1) + ' kB'
+    : (file.size / 1048576).toFixed(1) + ' MB';
+
+  if (a.status === 'registriert') {
+    const zeit = a.blockTime
+      ? new Date(a.blockTime * 1000).toLocaleString('de-CH',
+          { dateStyle: 'long', timeStyle: 'short' })
+      : 'unbekannt';
+    zeigen('gruen', '✓ Registriert und unverändert',
+      'Dieses Dokument wurde bei uns registriert und ist seither Byte für Byte unverändert.',
+      [
+        ['Datei', file.name + ' · ' + groesse],
+        ['Registriert am', zeit],
+        ['Fingerabdruck', hash],
+        ['Beleg auf der Kette', a.explorer
+          ? `<a href="${a.explorer}" target="_blank" rel="noopener">${a.signature}</a>`
+          : a.signature],
+      ]);
+  } else if (a.status === 'abweichung') {
+    zeigen('rot', '✗ Verändert',
+      'Zu diesem Dokument gibt es einen Eintrag, aber der Fingerabdruck stimmt '
+      + 'nicht mehr überein. Das Dokument wurde nach der Registrierung geändert.',
+      [['Datei', file.name + ' · ' + groesse], ['Fingerabdruck', hash]]);
+  } else {
+    zeigen('rot', '✗ Nicht registriert',
+      'Für dieses Dokument gibt es keinen Eintrag. Entweder wurde es nie '
+      + 'registriert — oder es wurde nach der Registrierung verändert. Beides '
+      + 'ist von aussen nicht unterscheidbar.',
+      [['Datei', file.name + ' · ' + groesse], ['Fingerabdruck', hash]]);
+  }
+}
+</script>
+</body>
+</html>

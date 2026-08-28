@@ -1,0 +1,15 @@
+{
+  "_hinweis": "TRRA nach der Spezifikation aus E:\\WEB\\TerraSol (00_Zusammenfassung). Dezimalen und Menge sind nach dem Praegen nicht mehr aenderbar.",
+  "name": "TerraSol",
+  "symbol": "TRRA",
+  "dezimalen": 9,
+  "menge": 100000000,
+  "uri": "https://terrasols.org/token/trra.json",
+  "veraenderbar": true,
+  "mint_recht_abgeben": true,
+  "freeze_recht_abgeben": true,
+  "_quelle": "TerraSol-Zusammenfassung vom 4. Juli 2026: reiner Utility-Token, gestufter Plattform-Zugang via Staking plus Governance-Stimmrecht, keine Rendite, kein Gewinn, kein Zins, keine Dividende. Feste Menge 100'000'000, Mint- und Freeze-Autoritaet widerrufen.",
+  "_achtung": "Dieses Skript praegt nur den reinen SPL-Mint. Staking, Governance und Marktplatz stecken im Anchor-Programm in E:\\WEB\\TerraSol\\01_Code\\terrasol. Beide Wege muessen dieselben Werte verwenden, sonst entstehen zwei verschiedene TRRA.",
+  "_vor_mainnet": "Die eigenen Projektregeln verlangen vor Mainnet ein externes Audit und ein Bug-Bounty. Devnet ist frei.",
+  "_uri_hinweis": "Zeigt auf terrasols.org. Name und Symbol stehen ohnehin auf der Kette; die URI liefert nur Beschreibung und Bild. Solange die Dateien nicht hochgeladen sind, fehlt in Wallets nur das Bild. Vor Mainnet gehoert die URI auf Arweave oder IPFS."
+}

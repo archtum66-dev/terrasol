@@ -1,0 +1,25 @@
+{
+  "name": "terrasol-oracle",
+  "version": "1.0.0",
+  "description": "TerraSol Lean MVP - Verifizierung und On-Chain-Anker",
+  "scripts": {
+    "test": "ts-node test-verify.ts && ts-node test-chain-memo.ts && ts-node test-pruefseite.ts",
+    "test:verify": "ts-node test-verify.ts",
+    "test:anchor": "ts-node test-chain-memo.ts",
+    "test:seite": "ts-node test-pruefseite.ts",
+    "demo": "ts-node demo-daten.ts",
+    "start": "ts-node verify-server.ts",
+    "chain": "solana-test-validator --reset --quiet"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0"
+  }
+}

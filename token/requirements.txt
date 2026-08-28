@@ -1,0 +1,7 @@
+# Token auf Solana erstellen - Abhaengigkeiten
+# Installation:  pip install -r requirements.txt
+
+solders>=0.29      # Schluessel, Transaktionen, Anweisungen (Rust-Kern)
+solana>=0.40       # nur fuer spl.token - der RPC-Zugang ist selbst gebaut
+requests>=2.31
+pillow>=10.0     # nur fuer metadaten_bauen.py (Bild zuschneiden)

@@ -1,0 +1,24 @@
+target/
+node_modules/
+__pycache__/
+*.pyc
+.env
+schluessel.json
+token_*.json
+data/proofs.json
+data/used-serials.json
+data/demo-ledger.json
+data/_test-*.json
+data/nachweis-*.bin
+_bilder/
+
+# Die alte Website aus der Token-Zeit. Sie bleibt auf der Platte, gehoert
+# aber nicht ins oeffentliche Repository: agb.html, datenschutz.html und
+# impressum.html sind ein zweiter Satz Rechtstexte neben den auf
+# terrasols.org veroeffentlichten, und das Impressum darin traegt noch
+# einen Platzhalter statt der Adresse.
+website/
+
+# Interner Ablagevermerk zu den am 28.08.2026 aus dem Web-Verzeichnis
+# genommenen Token-Metadaten. Gehoert nicht zum oeffentlichen Teil.
+token/metadaten/web-fassung_2026-08-23/

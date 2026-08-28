@@ -1,0 +1,18 @@
+[
+  {
+    "serial": "GS1-1-BR-GS1368-2021-1000",
+    "projectId": "GS1368",
+    "vintage": 2021,
+    "quantity": 1000,
+    "status": "Retired",
+    "retiredAt": "2024-03-10",
+    "beneficiary": "ACME AG"
+  },
+  {
+    "serial": "GS1-1-IN-GS4521-2022-500",
+    "projectId": "GS4521",
+    "vintage": 2022,
+    "quantity": 500,
+    "status": "Available"
+  }
+]

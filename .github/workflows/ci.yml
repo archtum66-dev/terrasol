@@ -1,0 +1,46 @@
+# CI: everything that runs without a validator runs on every push.
+# Chain-dependent suites (program e2e, oracle anchor tests) run locally via
+# `bash program/alles-testen.sh` — documented in the README, not faked here.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Engine unit tests (order book, HIP-1/HIP-2)
+        run: cargo test --release --manifest-path engine/Cargo.toml
+
+  program-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Agave toolchain
+        run: |
+          curl -sSfL https://release.anza.xyz/stable/install | sh
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Build smart contract (SBPF v3)
+        working-directory: program
+        run: cargo build-sbf --arch v3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terrasol-program
+          path: program/target/deploy/terrasol.so
+
+  oracle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verification pipeline tests (no chain required)
+        working-directory: oracle
+        run: |
+          npm install
+          npx ts-node test-verify.ts

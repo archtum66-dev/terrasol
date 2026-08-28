@@ -1,0 +1,28 @@
+[package]
+name = "engine"
+version = "1.1.0"
+edition = "2021"
+description = "Limit-Orderbuch mit Price-Time-Priority, HIP-1 und HIP-2, plus Netz-Messung"
+
+# Der Matching-Kern (src/buch.rs) hat KEINE Abhaengigkeiten - nur die
+# Rust-Standardbibliothek. Die Netz-Messung braucht ed25519; Kryptografie
+# schreibt man nicht selbst.
+[dependencies]
+ed25519-dalek = { version = "3", features = ["batch"] }
+
+[lib]
+name = "engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "messung"
+path = "src/main.rs"
+
+[[bin]]
+name = "netz"
+path = "src/netz.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

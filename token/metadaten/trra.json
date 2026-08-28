@@ -1,0 +1,16 @@
+{
+  "name": "TerraSol",
+  "symbol": "TRRA",
+  "description": "Utility-Token der TerraSol-Plattform für unabhängige CO2-Verifizierung. TRRA bezahlt Verifikationen und die Verankerung von Nachweisen und öffnet über Staking gestufte Plattformfunktionen; Halter stimmen in der Governance mit. TRRA gewährt keinen Anspruch auf Rendite, Gewinn, Zins oder Dividende und verbrieft keine Beteiligung.",
+  "image": "https://terrasols.org/token/trra-512.png",
+  "external_url": "https://terrasols.org",
+  "properties": {
+    "files": [
+      {
+        "uri": "https://terrasols.org/token/trra-512.png",
+        "type": "image/png"
+      }
+    ],
+    "category": "image"
+  }
+}
