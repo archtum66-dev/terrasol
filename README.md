@@ -1,22 +1,40 @@
 # TerraSol
 
-Independent CO₂ verification on Solana: oracle-signed proof-of-impact records,
-tiered access via staking, and a marketplace for verified impact credits —
-with an off-chain matching engine and on-chain settlement, so throughput is
-never limited by the chain.
+Cheap, verifiable proof anchoring on Solana. TerraSol checks an environmental
+claim against the issuing registry, blocks double counting, and anchors the
+result on-chain as a SHA-256 fingerprint. The document never leaves the
+customer's machine; only the hash reaches the chain. Anyone holding the
+document can verify it in a browser in seconds — and the chain refutes the
+check if TerraSol's own register was tampered with.
 
-**TRRA** is a pure utility token: staking grants access tiers and governance
-voting rights. It carries **no claim to yield, profit, interest or dividends**
-and represents no equity. Fixed supply 100,000,000; mint and freeze authority
-revoked at issuance. That wording is part of the legal design (Swiss FINMA
-utility-token line), not marketing copy — keep it intact.
+One rule shapes the architecture: **matching does not belong on a chain,
+proof does.** An off-chain Rust engine handles order flow, Solana notarises.
+Anchoring one proof costs 5,000 lamports; anchoring a batch of 469,329 fills
+costs the same 5,000 lamports — 0.011 lamports each. Every number in this
+repository is measured, not estimated.
+
+## Status and scope
+
+**Nothing is deployed to mainnet and no token has been issued.** The project's
+own standing rule is an external security audit before any mainnet deployment,
+without exception. What exists here has been built, executed and measured on a
+local validator with Metaplex cloned from mainnet.
+
+`TRRA` is specified but not issued, and is deliberately kept out of the way of
+everything else in this repository. It is a pure utility token: staking grants
+access tiers and governance voting rights, with **no claim to yield, profit,
+interest or dividends** and no equity. Fixed supply 100,000,000; mint and
+freeze authority revoked at issuance. That wording is part of the legal design
+(Swiss FINMA utility-token line), not marketing copy — keep it intact.
+
+The commercial service that runs today is token-less: registry verification
+sold per certificate, at terrasols.org.
 
 ## Architecture
 
-The design follows the principle proven by Hyperliquid — matching does not
-belong on a chain, proofs do — but settles on Solana instead of running its
-own L1, so it inherits Solana's validators, wallets and liquidity instead of
-bootstrapping trust from zero.
+The same principle Hyperliquid proved at scale, but settling on Solana
+instead of running its own L1: it inherits Solana's validators, wallets and
+liquidity instead of bootstrapping trust from zero.
 
 ```
 verify (oracle)          match (engine)             settle & prove (Solana)
