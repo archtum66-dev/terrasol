@@ -92,7 +92,9 @@ async function main() {
 
   const js = await holen(port, "/pruefen.js");
   check("script served as JavaScript", String(js.kopf["content-type"]).startsWith("text/javascript"));
-  check("script never uses innerHTML", js.code === 200 && !js.body.includes("innerHTML"));
+  // Real HTML sinks only — the word may appear in comments explaining the rule.
+  const htmlSenke = /\.(innerHTML|outerHTML)\s*\+?=|insertAdjacentHTML\s*\(|document\.write\s*\(/;
+  check("script never writes HTML", js.code === 200 && !htmlSenke.test(js.body));
 
   const post = await holen(port, "/api/pruefen", "POST");
   check("only GET/HEAD allowed", post.code === 405);

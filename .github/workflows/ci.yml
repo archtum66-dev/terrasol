@@ -112,13 +112,21 @@ jobs:
           tool: cargo-audit
       - name: Engine dependencies
         run: cd engine && cargo generate-lockfile && cargo audit
-      - name: Program dependencies
-        # Both advisories come in through anchor-lang 0.30.1 -> solana-program
-        # 1.18 and concern off-chain signing/timing, not on-chain code. They
-        # disappear with the planned Anchor upgrade; until then they are
-        # listed here explicitly instead of silenced globally.
+      - name: Program dependencies (what ships on-chain)
+        # Audits the program's own dependency tree. The dev-dependencies
+        # (solana-program-test with its client/network stack) only run the
+        # native tests on the CI runner and never reach the chain, so they are
+        # stripped from a scratch copy before resolving.
+        # The two ignored advisories come in through anchor-lang 0.30.1 ->
+        # solana-program 1.18 and concern off-chain signing/timing, not
+        # on-chain code. They disappear with the planned Anchor upgrade; until
+        # then they are listed here explicitly instead of silenced globally.
         run: |
-          cd program && cargo generate-lockfile
+          mkdir -p "$RUNNER_TEMP/prog" && cp -r program/. "$RUNNER_TEMP/prog/"
+          cd "$RUNNER_TEMP/prog"
+          sed -i '/^\[dev-dependencies\]/,/^\[lints/{/^\[lints/!d}' programs/terrasol/Cargo.toml
+          ! grep -q 'solana-program-test' programs/terrasol/Cargo.toml
+          cargo generate-lockfile
           cargo audit --ignore RUSTSEC-2024-0344 --ignore RUSTSEC-2022-0093
 
   secrets:

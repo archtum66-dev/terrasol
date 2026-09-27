@@ -529,14 +529,14 @@ fn buendel_pruefen(roh: &[u8]) -> Option<usize> {
 /// Stapelprüfung, die bei jedem Fehler `false` liefert statt abzustürzen:
 /// ungültiger Schlüssel, ungültige Signatur, falsche Länge.
 fn stapel_gueltig(roh: &[u8]) -> bool {
-    if roh.is_empty() || roh.len() % NACHRICHT != 0 {
+    if roh.is_empty() || !roh.len().is_multiple_of(NACHRICHT) {
         return false;
     }
     let anzahl = roh.len() / NACHRICHT;
     let mut nachrichten: Vec<&[u8]> = Vec::with_capacity(anzahl);
     let mut signaturen: Vec<Signature> = Vec::with_capacity(anzahl);
     let mut schluessel: Vec<VerifyingKey> = Vec::with_capacity(anzahl);
-    for n in roh.chunks_exact(NACHRICHT) {
+    for n in roh.as_chunks::<NACHRICHT>().0 {
         let Ok(k) = VerifyingKey::from_bytes(n[0..32].try_into().expect("32 Bytes")) else {
             return false;
         };
@@ -545,36 +545,6 @@ fn stapel_gueltig(roh: &[u8]) -> bool {
         schluessel.push(k);
     }
     ed25519_dalek::verify_batch(&nachrichten, &signaturen, &schluessel).is_ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ungueltige_eingaben_werden_verworfen_statt_abzustuerzen() {
-        let sk = SigningKey::from_bytes(&[3u8; 32]);
-        let gut = nachricht_bauen(&sk, 1, 100, 5, true);
-        assert!(stapel_gueltig(&gut));
-
-        let mut falsch = gut;
-        falsch[100] ^= 1; // Nutzlast nach der Signatur verändert
-        assert!(!stapel_gueltig(&falsch));
-        assert!(!stapel_gueltig(&gut[..100]), "Teilnachricht");
-
-        let mut w = Wuerfel(1);
-        let bue = buendel_bauen(&sk, 4, &mut w);
-        assert_eq!(buendel_pruefen(&bue), Some(4));
-        assert_eq!(buendel_pruefen(&bue[..bue.len() - 1]), None, "zu kurz");
-        assert_eq!(buendel_pruefen(&bue[..50]), None, "kürzer als der Kopf");
-
-        // Ein korrekt signiertes Bündel, das mehr Orders behauptet als es enthält.
-        let mut luege = bue.clone();
-        luege[96..100].copy_from_slice(&1000u32.to_le_bytes());
-        let sig: Signature = sk.sign(&luege[96..]);
-        luege[32..96].copy_from_slice(&sig.to_bytes());
-        assert_eq!(buendel_pruefen(&luege), None);
-    }
 }
 
 #[inline(always)]
@@ -824,4 +794,34 @@ fn main() {
         }
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ungueltige_eingaben_werden_verworfen_statt_abzustuerzen() {
+        let sk = SigningKey::from_bytes(&[3u8; 32]);
+        let gut = nachricht_bauen(&sk, 1, 100, 5, true);
+        assert!(stapel_gueltig(&gut));
+
+        let mut falsch = gut;
+        falsch[100] ^= 1; // Nutzlast nach der Signatur verändert
+        assert!(!stapel_gueltig(&falsch));
+        assert!(!stapel_gueltig(&gut[..100]), "Teilnachricht");
+
+        let mut w = Wuerfel(1);
+        let bue = buendel_bauen(&sk, 4, &mut w);
+        assert_eq!(buendel_pruefen(&bue), Some(4));
+        assert_eq!(buendel_pruefen(&bue[..bue.len() - 1]), None, "zu kurz");
+        assert_eq!(buendel_pruefen(&bue[..50]), None, "kürzer als der Kopf");
+
+        // Ein korrekt signiertes Bündel, das mehr Orders behauptet als es enthält.
+        let mut luege = bue.clone();
+        luege[96..100].copy_from_slice(&1000u32.to_le_bytes());
+        let sig: Signature = sk.sign(&luege[96..]);
+        luege[32..96].copy_from_slice(&sig.to_bytes());
+        assert_eq!(buendel_pruefen(&luege), None);
+    }
 }
