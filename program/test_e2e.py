@@ -20,6 +20,14 @@ Ablauf (positiv und negativ):
   9  set_paused durch Fremden -> UnauthorizedGovernance (6010)
  10  Governance pausiert -> stake scheitert mit Paused (6002) -> entpausen
 
+Erwartet das Programm unter seiner deklarierten ID mit dem lokalen Schluessel
+(~/.config/solana/id.json) als Upgrade-Autoritaet - genau so startet
+`alles-testen.sh` die Kette. Nur die Upgrade-Autoritaet darf initialisieren.
+
+Unstake NACH Ablauf der 7-Tage-Sperre laesst sich auf einer echten Kette
+nicht in Sekunden pruefen; das deckt die Rust-Suite ab
+(programs/terrasol/tests/programm.rs, mit gestellter Uhr).
+
 Aufruf:  python3 test_e2e.py
 """
 
@@ -30,7 +38,7 @@ import sys
 from hashlib import sha256
 from pathlib import Path
 
-sys.path.insert(0, "/home/claude/tok/token")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "token"))
 
 from solders.instruction import AccountMeta, Instruction
 from solders.keypair import Keypair
@@ -50,6 +58,7 @@ from spl.token.models import InitializeMintParams, MintToParams
 from rpc import Knoten, RpcFehler
 
 PROGRAMM = Pubkey.from_string("3GGT5oAJXjpvFnofn3W25jTBhKRp4TEmKSSyzm7J7E9z")
+BPF_LOADER_UPGRADEABLE = Pubkey.from_string("BPFLoaderUpgradeab1e11111111111111111111111")
 EINHEIT = 10**9                       # 9 Dezimalen
 
 fehlschlaege = 0
@@ -142,28 +151,48 @@ def main() -> int:
                              amount=1_000 * EINHEIT)),
     ]
     k.senden(ix, zahler, [mint])
-    check("TRRA-Mint angelegt, Alice 5000 / Bob 1000", True, str(mint.pubkey())[:20] + "…")
+
+    def bestand(konto: Pubkey) -> int:
+        return int(k.konto(konto, geparst=True)["data"]["parsed"]["info"]["tokenAmount"]["amount"])
+
+    check("TRRA-Mint angelegt, Alice 5000 / Bob 1000",
+          bestand(alice_token) == 5_000 * EINHEIT and bestand(bob_token) == 1_000 * EINHEIT,
+          str(mint.pubkey())[:20] + "…")
 
     # -- PDAs -------------------------------------------------------------
     config, _ = Pubkey.find_program_address([b"config"], PROGRAMM)
     vault, _ = Pubkey.find_program_address([b"vault", bytes(config)], PROGRAMM)
     position, _ = Pubkey.find_program_address([b"position", bytes(alice.pubkey())], PROGRAMM)
+    program_data, _ = Pubkey.find_program_address([bytes(PROGRAMM)], BPF_LOADER_UPGRADEABLE)
 
     # -- 2) initialize ----------------------------------------------------
     stufen = [100 * EINHEIT, 1_000 * EINHEIT, 10_000 * EINHEIT, 100_000 * EINHEIT]
     daten = disc_ix("initialize") + b"".join(u64(s) for s in stufen)
-    k.senden([Instruction(PROGRAMM, daten, [
-        AccountMeta(config, False, True),
-        AccountMeta(governance.pubkey(), False, False),
-        AccountMeta(oracle.pubkey(), False, False),
-        AccountMeta(mint.pubkey(), False, False),
-        AccountMeta(vault, False, True),
-        AccountMeta(zahler.pubkey(), True, True),
-        AccountMeta(TOKEN_PROGRAM_ID, False, False),
-        AccountMeta(SYS_ID, False, False),
-        AccountMeta(RENT, False, False),
-    ])], zahler)
-    check("initialize mit Tokenomics-Stufen 100/1k/10k/100k", True)
+
+    def init_konten(wer: Pubkey) -> list[AccountMeta]:
+        return [
+            AccountMeta(config, False, True),
+            AccountMeta(governance.pubkey(), False, False),
+            AccountMeta(oracle.pubkey(), False, False),
+            AccountMeta(mint.pubkey(), False, False),
+            AccountMeta(vault, False, True),
+            AccountMeta(wer, True, True),
+            AccountMeta(program_data, False, False),
+            AccountMeta(TOKEN_PROGRAM_ID, False, False),
+            AccountMeta(SYS_ID, False, False),
+            AccountMeta(RENT, False, False),
+        ]
+
+    # Wer nicht Upgrade-Autorität ist, darf die Config nicht an sich reissen.
+    try:
+        k.senden([Instruction(PROGRAMM, daten, init_konten(bob.pubkey()))], bob)
+        check("Fremder darf nicht initialisieren", False, "ging durch!")
+    except RpcFehler as e:
+        check("Fremder darf nicht initialisieren (UnauthorizedInitializer 6016)",
+              anchor_fehler(e) == 6016, f"Code {anchor_fehler(e)}")
+
+    k.senden([Instruction(PROGRAMM, daten, init_konten(zahler.pubkey()))], zahler)
+    check("initialize durch die Upgrade-Autorität", k.konto_daten(config) is not None)
 
     # -- 3) Config zurücklesen -------------------------------------------
     roh = k.konto_daten(config)
@@ -195,8 +224,10 @@ def main() -> int:
     vault_stand = int(k.konto(vault, geparst=True)["data"]["parsed"]["info"]["tokenAmount"]["amount"])
     check("stake: Position 1500, Vault 1500",
           betrag == 1_500 * EINHEIT and vault_stand == 1_500 * EINHEIT)
-    # Stufe nach tier_for: 1500 >= 100 (1), >= 1000 (2), < 10000 -> 2
-    check("Stufe 2 erreicht (Tokenomics)", 1_500 * EINHEIT >= stufen[1] and 1_500 * EINHEIT < stufen[2])
+    # Stufe aus den Schwellen, wie sie AUF DER KETTE stehen:
+    # 1500 >= 100 (1), >= 1000 (2), < 10000 -> 2
+    stufe = sum(1 for s in gelesene_stufen if betrag >= s)
+    check("Stufe 2 nach den Schwellen auf der Kette", stufe == 2, f"Stufe {stufe}")
 
     # -- 5) Sofortiges unstake -> StillLocked ----------------------------
     daten = disc_ix("unstake") + u64(100 * EINHEIT)
@@ -253,18 +284,23 @@ def main() -> int:
         AccountMeta(SYS_ID, False, False),
     ])], alice)
 
-    def bestand(konto: Pubkey) -> int:
-        return int(k.konto(konto, geparst=True)["data"]["parsed"]["info"]["tokenAmount"]["amount"])
-
     alice_vorher, bob_vorher = bestand(alice_token), bestand(bob_token)
-    k.senden([Instruction(PROGRAMM, disc_ix("buy_credit"), [
+    kauf_konten = [
         AccountMeta(config, False, False),
         AccountMeta(listing, False, True),
         AccountMeta(bob_token, False, True),
         AccountMeta(alice_token, False, True),
         AccountMeta(bob.pubkey(), True, True),
         AccountMeta(TOKEN_PROGRAM_ID, False, False),
-    ])], bob)
+    ]
+    # Bob zahlt höchstens, was er unterschrieben hat.
+    try:
+        k.senden([Instruction(PROGRAMM, disc_ix("buy_credit") + u64(249 * EINHEIT), kauf_konten)], bob)
+        check("Preis über Käuferlimit abgewiesen", False, "ging durch!")
+    except RpcFehler as e:
+        check("Preis über Käuferlimit abgewiesen (PriceAboveLimit 6015)",
+              anchor_fehler(e) == 6015, f"Code {anchor_fehler(e)}")
+    k.senden([Instruction(PROGRAMM, disc_ix("buy_credit") + u64(250 * EINHEIT), kauf_konten)], bob)
     check("Marktplatz: Bob kauft für 250 TRRA, Zahlung Bob -> Alice",
           bestand(alice_token) == alice_vorher + 250 * EINHEIT
           and bestand(bob_token) == bob_vorher - 250 * EINHEIT)
@@ -287,7 +323,10 @@ def main() -> int:
         check("Fremder darf nicht pausieren (UnauthorizedGovernance 6010)",
               anchor_fehler(e) == 6010, f"Code {anchor_fehler(e)}")
 
+    # paused steht nach governance, oracle, mint, vault, 4 Stufen, total, count.
+    PAUSED = 8 + 4 * 32 + 4 * 8 + 2 * 8
     pausieren(True, governance)
+    pausiert = k.konto_daten(config)[PAUSED] == 1
     try:
         k.senden([Instruction(PROGRAMM, disc_ix("stake") + u64(EINHEIT), stake_konten)], alice)
         check("Pausiert: stake abgewiesen", False, "ging durch!")
@@ -295,7 +334,8 @@ def main() -> int:
         check("Pausiert: stake abgewiesen (Paused 6002)",
               anchor_fehler(e) == 6002, f"Code {anchor_fehler(e)}")
     pausieren(False, governance)
-    check("Governance kann pausieren und entpausieren", True)
+    check("Governance kann pausieren und entpausieren",
+          pausiert and k.konto_daten(config)[PAUSED] == 0)
 
     print("\n" + ("ALL PASS" if fehlschlaege == 0 else f"{fehlschlaege} FAILED"))
     return 0 if fehlschlaege == 0 else 1

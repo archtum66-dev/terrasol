@@ -30,7 +30,8 @@ import time
 from hashlib import sha256
 from pathlib import Path
 
-sys.path.insert(0, "/home/claude/tok/token")
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "token"))
 
 from solders.instruction import AccountMeta, Instruction
 from solders.keypair import Keypair
@@ -39,7 +40,7 @@ from solders.pubkey import Pubkey
 from rpc import Knoten
 
 MEMO = Pubkey.from_string("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
-ENGINE = Path("/home/claude/tok/engine")
+ENGINE = REPO / "engine"
 
 fehlschlaege = 0
 

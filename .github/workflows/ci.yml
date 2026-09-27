@@ -1,46 +1,142 @@
-# CI: everything that runs without a validator runs on every push.
-# Chain-dependent suites (program e2e, oracle anchor tests) run locally via
-# `bash program/alles-testen.sh` — documented in the README, not faked here.
+# CI - everything runs on every push, including the chain suites: a local
+# solana-test-validator on the runner (free, play money, no public network).
+#
+# Supply chain: third-party actions are pinned to commit SHAs, the Agave
+# toolchain to an exact version, and the workflow token is read-only.
 name: ci
 
 on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  AGAVE_VERSION: v4.2.2
+  CARGO_TERM_COLOR: always
+
 jobs:
   engine:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Engine unit tests (order book, HIP-1/HIP-2)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          components: clippy
+      - name: Unit tests (order book, HIP-1/HIP-2, network hardening)
         run: cargo test --release --manifest-path engine/Cargo.toml
+      - name: Unit tests with debug assertions
+        run: cargo test --manifest-path engine/Cargo.toml
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --all-targets --manifest-path engine/Cargo.toml -- -D warnings
+
+  program-test:
+    # Native tests against the real Solana runtime with a controllable clock:
+    # covers every instruction, including unstake after the 7-day lock.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: program
+      - name: Program tests (solana-program-test)
+        run: cargo test --manifest-path program/Cargo.toml
 
   program-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Agave toolchain
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Agave toolchain (pinned)
         run: |
-          curl -sSfL https://release.anza.xyz/stable/install | sh
+          curl -sSfL "https://release.anza.xyz/${AGAVE_VERSION}/install" | sh
           echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Toolchain versions
+        run: solana --version && cargo build-sbf --version
       - name: Build smart contract (SBPF v3)
         working-directory: program
         run: cargo build-sbf --arch v3
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: terrasol-program
           path: program/target/deploy/terrasol.so
 
+  chain:
+    # The full customer path on a real (local) chain: program e2e, memo
+    # anchoring, check page. Same scripts a contributor runs locally.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
+        with:
+          python-version: "3.11"
+      - name: Install Agave toolchain (pinned)
+        run: |
+          curl -sSfL "https://release.anza.xyz/${AGAVE_VERSION}/install" | sh
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+      - name: Python dependencies
+        run: pip install -r token/requirements.txt
+      - name: Program end-to-end (build, fresh chain, e2e)
+        run: bash program/alles-testen.sh
+      - name: Oracle chain tests (anchor + check page)
+        working-directory: oracle
+        run: |
+          npm install
+          npx ts-node test-chain-memo.ts
+          npx ts-node test-pruefseite.ts
+
   oracle:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-      - name: Verification pipeline tests (no chain required)
+      - name: Verification pipeline + hardening tests (no chain required)
         working-directory: oracle
         run: |
           npm install
           npx ts-node test-verify.ts
+          npx ts-node test-haertung.ts
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        with:
+          tool: cargo-audit
+      - name: Engine dependencies
+        run: cd engine && cargo generate-lockfile && cargo audit
+      - name: Program dependencies (what ships on-chain)
+        # Audits the program's own dependency tree. The dev-dependencies
+        # (solana-program-test with its client/network stack) only run the
+        # native tests on the CI runner and never reach the chain, so they are
+        # stripped from a scratch copy before resolving.
+        # The two ignored advisories come in through anchor-lang 0.30.1 ->
+        # solana-program 1.18 and concern off-chain signing/timing, not
+        # on-chain code. They disappear with the planned Anchor upgrade; until
+        # then they are listed here explicitly instead of silenced globally.
+        run: |
+          mkdir -p "$RUNNER_TEMP/prog" && cp -r program/. "$RUNNER_TEMP/prog/"
+          cd "$RUNNER_TEMP/prog"
+          sed -i '/^\[dev-dependencies\]/,/^\[lints/{/^\[lints/!d}' programs/terrasol/Cargo.toml
+          ! grep -q 'solana-program-test' programs/terrasol/Cargo.toml
+          cargo generate-lockfile
+          cargo audit --ignore RUSTSEC-2024-0344 --ignore RUSTSEC-2022-0093
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks over the full history
+        run: |
+          curl -sSfL -o gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
+          tar xzf gl.tgz gitleaks
+          ./gitleaks git --log-opts="--all" --redact --no-banner .

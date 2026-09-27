@@ -64,6 +64,11 @@ export interface ProofOnChain {
   blockTime: number | null;
   slot: number;
   signature: string;
+  /** Fee payer (first signer) — the key that paid for, and signed, the anchor. */
+  feePayer: string | null;
+  /** True if the transaction failed (or its status is unknown). A failed
+   *  transaction is recorded on-chain with its fee, but proves nothing. */
+  failed: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,34 +132,27 @@ export async function readProof(
     throw new Error(`transaction not found: ${signature}`);
   }
 
-  // The memo shows up in the log as: Program log: Memo (len N): "…"
+  // Read the hash from the memo INSTRUCTION of the memo program. Logs are
+  // deliberately not used: any other program in the same transaction can
+  // print a line that looks exactly like a memo log.
   let hashHex: string | null = null;
-  for (const line of tx.meta?.logMessages ?? []) {
-    const quoted = line.match(/Memo \(len \d+\): "(.*)"$/);
-    if (quoted) {
-      hashHex = parseMemo(quoted[1]);
+  const msg = tx.transaction.message;
+  const keys = msg.getAccountKeys({
+    accountKeysFromLookups: tx.meta?.loadedAddresses,
+  });
+  for (const ix of msg.compiledInstructions) {
+    const programId = keys.get(ix.programIdIndex);
+    if (programId?.equals(MEMO_PROGRAM_ID)) {
+      hashHex = parseMemo(Buffer.from(ix.data).toString("utf8"));
       if (hashHex) break;
     }
   }
 
-  // Fallback: read the instruction data directly. Works even when logs are
-  // truncated, and is the more honest source — logs are convenience, the
-  // instruction is the fact.
-  if (!hashHex) {
-    const msg = tx.transaction.message;
-    const keys = msg.getAccountKeys({
-      accountKeysFromLookups: tx.meta?.loadedAddresses,
-    });
-    for (const ix of msg.compiledInstructions) {
-      const programId = keys.get(ix.programIdIndex);
-      if (programId?.equals(MEMO_PROGRAM_ID)) {
-        hashHex = parseMemo(Buffer.from(ix.data).toString("utf8"));
-        if (hashHex) break;
-      }
-    }
-  }
+  const feePayer = keys.get(0)?.toBase58() ?? null;
+  // No meta means the outcome is unknown — treat as not proven.
+  const failed = !tx.meta || tx.meta.err !== null;
 
-  return { hashHex, blockTime: tx.blockTime ?? null, slot: tx.slot, signature };
+  return { hashHex, blockTime: tx.blockTime ?? null, slot: tx.slot, signature, feePayer, failed };
 }
 
 /**
@@ -164,12 +162,16 @@ export async function readProof(
 export async function verifyProof(
   connection: Connection,
   signature: string,
-  expectedHash: number[] | Buffer | Uint8Array
+  expectedHash: number[] | Buffer | Uint8Array,
+  /** If given, the anchor only counts when one of these keys paid for it. */
+  trustedSigners?: string[]
 ): Promise<{ match: boolean; anchoredAt: Date | null; onChain: ProofOnChain }> {
   const onChain = await readProof(connection, signature);
   const expected = toHex(expectedHash);
+  const signerOk =
+    !trustedSigners || (onChain.feePayer !== null && trustedSigners.includes(onChain.feePayer));
   return {
-    match: onChain.hashHex === expected,
+    match: onChain.hashHex === expected && !onChain.failed && signerOk,
     anchoredAt: onChain.blockTime ? new Date(onChain.blockTime * 1000) : null,
     onChain,
   };

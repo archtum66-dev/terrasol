@@ -42,7 +42,15 @@ GS_API_BASE=https://registry.goldstandard.org   # nur live; Pfad bestätigen
 GS_API_KEY=...                   # nur live, falls nötig
 REQUIRE_RETIRED=true             # nur zum Testen auf false
 LEDGER_PATH=./data/used-serials.json
+
+# Prüfseite (verify-server.ts)
+ANCHOR_SIGNERS=<pubkey1>,<pubkey2>  # nur Anker, die diese Schlüssel bezahlt haben, zählen
+RATE_LIMIT_PER_MIN=60               # je Client-Adresse, für /api/*
 ```
+
+Ohne `ANCHOR_SIGNERS` warnt der Server beim Start: Dann würde ein manipulierter
+Registereintrag, der auf eine fremd bezahlte Verankerung desselben Hashes zeigt,
+nicht erkannt.
 
 ## Kleine Änderungen an bestehenden Dateien
 
@@ -63,16 +71,27 @@ const { subject, evidenceUri, co2eTonnes, registry } = req.body ?? {};
 const sub: Submission = { /* … */, registry };
 ```
 
-**3) `server.ts` — nach erfolgreichem On-Chain-Write den Ledger schreiben:**
+**3) `server.ts` — Serial VOR dem On-Chain-Write atomar reservieren:**
 
 ```ts
 import { ledger } from "./ledger";                     // oben ergänzen
 
 const v = await verifyEvidence(sub);                    // v.record ist bei Erfolg gesetzt
-// … registerImpact(…) wie bisher …
-const { txSig, index } = await registerImpact(/* … */);
-ledger.commit(v.record!.standard, v.record!.serial, sub.subject, txSig);   // NEU
+const { standard, serial } = v.record!;
+// claim prüft und schreibt unter einer exklusiven Sperre: Zwei parallele
+// Anfragen zum selben Serial können nie beide durchkommen.
+if (!ledger.claim(standard, serial, sub.subject)) throw new Error("double-count");
+try {
+  const { txSig } = await registerImpact(/* … */);
+  ledger.commit(standard, serial, sub.subject, txSig);  // Reservierung abschliessen
+} catch (e) {
+  ledger.release(standard, serial);                     // Anker gescheitert: freigeben
+  throw e;
+}
 ```
+
+`verifyEvidence` prüft mit `ledger.has` nur vorab (schnelle Absage); verbindlich
+ist erst `claim`.
 
 **4) Frontend `app/impact/page.tsx` — Felder für Serial/Projekt/Vintage** und im
 POST-Body mitschicken:

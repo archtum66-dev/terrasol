@@ -18,6 +18,13 @@
 //!   cargo run --release --bin netz -- kette     vollständige Kette über TCP
 //!   cargo run --release --bin netz -- budget    Rechnung für 400 000/s
 //!   cargo run --release --bin netz              alles
+//!
+//! **Messcode, kein Börsenserver.** Die Signatur wird nur gegen den in der
+//! Nachricht mitgeschickten Schlüssel geprüft; es gibt keine Bindung an ein
+//! Konto, keine Nonce-Prüfung und keinen Schutz vor Wiederholung. Ungültige
+//! Stapel und Bündel werden verworfen statt ausgeführt - der Prüffaden stürzt
+//! daran nicht ab. Wer daraus einen echten Dienst baut, ergänzt genau diese
+//! drei Punkte zuerst.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -298,27 +305,15 @@ fn kette(pruefer: usize, mit_signatur: bool, orders: usize, roh: Arc<Vec<u8>>) -
                 if ganze == 0 {
                     continue;
                 }
-                if mit_signatur {
-                    let mut nachrichten: Vec<&[u8]> = Vec::with_capacity(ganze);
-                    let mut signaturen: Vec<Signature> = Vec::with_capacity(ganze);
-                    let mut schluessel: Vec<VerifyingKey> = Vec::with_capacity(ganze);
+                // Ein ungültiger Stapel wird verworfen, nie ausgeführt.
+                if !mit_signatur || stapel_gueltig(&puffer[..ganze * NACHRICHT]) {
+                    let mut auftraege = Vec::with_capacity(ganze);
                     for i in 0..ganze {
-                        let n = &puffer[i * NACHRICHT..(i + 1) * NACHRICHT];
-                        nachrichten.push(&n[96..128]);
-                        signaturen.push(Signature::from_bytes(&n[32..96].try_into().unwrap()));
-                        schluessel.push(
-                            VerifyingKey::from_bytes(&n[0..32].try_into().unwrap()).unwrap(),
-                        );
+                        auftraege.push(nutzlast_lesen(&puffer[i * NACHRICHT..(i + 1) * NACHRICHT]));
                     }
-                    ed25519_dalek::verify_batch(&nachrichten, &signaturen, &schluessel)
-                        .expect("Stapel muss gültig sein");
-                }
-                let mut auftraege = Vec::with_capacity(ganze);
-                for i in 0..ganze {
-                    auftraege.push(nutzlast_lesen(&puffer[i * NACHRICHT..(i + 1) * NACHRICHT]));
-                }
-                if sender.send(auftraege).is_err() {
-                    break;
+                    if sender.send(auftraege).is_err() {
+                        break;
+                    }
                 }
                 let rest = belegt - ganze * NACHRICHT;
                 puffer.copy_within(ganze * NACHRICHT..belegt, 0);
@@ -426,8 +421,11 @@ fn kette_buendel(pruefer: usize, je_buendel: usize, buendel_anzahl: usize) -> f6
                 let mut auftraege = Vec::with_capacity(ganze * je_buendel);
                 for b in 0..ganze {
                     let bue = &puffer[b * laenge..(b + 1) * laenge];
-                    // EINE Signaturprüfung für je_buendel Orders.
-                    let anzahl = buendel_pruefen(bue).expect("Bündel muss gültig sein");
+                    // EINE Signaturprüfung für je_buendel Orders. Ungültige
+                    // Bündel werden übersprungen.
+                    let Some(anzahl) = buendel_pruefen(bue) else {
+                        continue;
+                    };
                     for i in 0..anzahl {
                         auftraege.push(buendel_order(bue, i));
                     }
@@ -513,10 +511,40 @@ fn buendel_bauen(sk: &SigningKey, n: usize, w: &mut Wuerfel) -> Vec<u8> {
 
 #[inline(always)]
 fn buendel_pruefen(roh: &[u8]) -> Option<usize> {
+    if roh.len() < KOPF {
+        return None;
+    }
     let schluessel = VerifyingKey::from_bytes(&roh[0..32].try_into().ok()?).ok()?;
     let sig = Signature::from_bytes(&roh[32..96].try_into().ok()?);
     schluessel.verify_strict(&roh[96..], &sig).ok()?;
-    Some(u32::from_le_bytes(roh[96..100].try_into().ok()?) as usize)
+    let anzahl = u32::from_le_bytes(roh[96..100].try_into().ok()?) as usize;
+    // Die (signierte!) Anzahl muss zur Länge passen - sonst liest
+    // `buendel_order` über das Ende hinaus.
+    if anzahl.checked_mul(NUTZLAST)?.checked_add(KOPF)? != roh.len() {
+        return None;
+    }
+    Some(anzahl)
+}
+
+/// Stapelprüfung, die bei jedem Fehler `false` liefert statt abzustürzen:
+/// ungültiger Schlüssel, ungültige Signatur, falsche Länge.
+fn stapel_gueltig(roh: &[u8]) -> bool {
+    if roh.is_empty() || !roh.len().is_multiple_of(NACHRICHT) {
+        return false;
+    }
+    let anzahl = roh.len() / NACHRICHT;
+    let mut nachrichten: Vec<&[u8]> = Vec::with_capacity(anzahl);
+    let mut signaturen: Vec<Signature> = Vec::with_capacity(anzahl);
+    let mut schluessel: Vec<VerifyingKey> = Vec::with_capacity(anzahl);
+    for n in roh.as_chunks::<NACHRICHT>().0 {
+        let Ok(k) = VerifyingKey::from_bytes(n[0..32].try_into().expect("32 Bytes")) else {
+            return false;
+        };
+        nachrichten.push(&n[96..128]);
+        signaturen.push(Signature::from_bytes(n[32..96].try_into().expect("64 Bytes")));
+        schluessel.push(k);
+    }
+    ed25519_dalek::verify_batch(&nachrichten, &signaturen, &schluessel).is_ok()
 }
 
 #[inline(always)]
@@ -766,4 +794,34 @@ fn main() {
         }
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ungueltige_eingaben_werden_verworfen_statt_abzustuerzen() {
+        let sk = SigningKey::from_bytes(&[3u8; 32]);
+        let gut = nachricht_bauen(&sk, 1, 100, 5, true);
+        assert!(stapel_gueltig(&gut));
+
+        let mut falsch = gut;
+        falsch[100] ^= 1; // Nutzlast nach der Signatur verändert
+        assert!(!stapel_gueltig(&falsch));
+        assert!(!stapel_gueltig(&gut[..100]), "Teilnachricht");
+
+        let mut w = Wuerfel(1);
+        let bue = buendel_bauen(&sk, 4, &mut w);
+        assert_eq!(buendel_pruefen(&bue), Some(4));
+        assert_eq!(buendel_pruefen(&bue[..bue.len() - 1]), None, "zu kurz");
+        assert_eq!(buendel_pruefen(&bue[..50]), None, "kürzer als der Kopf");
+
+        // Ein korrekt signiertes Bündel, das mehr Orders behauptet als es enthält.
+        let mut luege = bue.clone();
+        luege[96..100].copy_from_slice(&1000u32.to_le_bytes());
+        let sig: Signature = sk.sign(&luege[96..]);
+        luege[32..96].copy_from_slice(&sig.to_bytes());
+        assert_eq!(buendel_pruefen(&luege), None);
+    }
 }

@@ -38,6 +38,7 @@ pub mod terrasol {
         cfg.total_staked = 0;
         cfg.impact_count = 0;
         cfg.paused = false;
+        cfg.pending_governance = Pubkey::default();
         cfg.bump = ctx.bumps.config;
         cfg.vault_bump = ctx.bumps.vault;
         emit!(Initialized { governance: cfg.governance, oracle: cfg.oracle, stake_mint: cfg.stake_mint });
@@ -72,17 +73,19 @@ pub mod terrasol {
         Ok(())
     }
 
+    /// Returns staked principal. Deliberately NOT gated by `paused`: the pause
+    /// stops new activity, it must never freeze a holder's own principal
+    /// (SECURITY.md invariant #1, utility-token design).
     pub fn unstake(ctx: Context<Unstake>, amount: u64) -> Result<()> {
-        let cfg = &ctx.accounts.config;
-        require!(!cfg.paused, TerraError::Paused);
         require!(amount > 0, TerraError::ZeroAmount);
         let pos = &mut ctx.accounts.position;
         require!(pos.amount >= amount, TerraError::InsufficientStake);
         let clock = Clock::get()?;
         require!(clock.unix_timestamp >= pos.locked_until, TerraError::StillLocked);
-        let cfg_key = ctx.accounts.config.key();
-        let vault_bump = ctx.accounts.config.vault_bump;
-        let seeds = &[b"vault".as_ref(), cfg_key.as_ref(), &[vault_bump]];
+        // The vault's token authority is the CONFIG PDA (see `Initialize`), so the
+        // CPI must be signed with the config seeds - not with the vault's own.
+        let config_bump = ctx.accounts.config.bump;
+        let seeds = &[b"config".as_ref(), &[config_bump]];
         let signer = &[&seeds[..]];
         token::transfer(
             CpiContext::new_with_signer(
@@ -152,10 +155,21 @@ pub mod terrasol {
         Ok(())
     }
 
+    /// Step 1 of 2: propose a new governance authority. Nothing changes until
+    /// the proposed key accepts, so a mistyped key can never capture control.
     pub fn set_governance(ctx: Context<Govern>, new_governance: Pubkey) -> Result<()> {
         require!(new_governance != Pubkey::default(), TerraError::InvalidAuthority);
-        ctx.accounts.config.governance = new_governance;
-        emit!(GovernanceTransferred { new_governance });
+        ctx.accounts.config.pending_governance = new_governance;
+        emit!(GovernanceProposed { proposed: new_governance });
+        Ok(())
+    }
+
+    /// Step 2 of 2: the proposed authority signs and takes over.
+    pub fn accept_governance(ctx: Context<AcceptGovernance>) -> Result<()> {
+        let cfg = &mut ctx.accounts.config;
+        cfg.governance = cfg.pending_governance;
+        cfg.pending_governance = Pubkey::default();
+        emit!(GovernanceTransferred { new_governance: cfg.governance });
         Ok(())
     }
 
@@ -178,13 +192,16 @@ pub mod terrasol {
         Ok(())
     }
 
-    /// Buy a listed credit. Buyer pays `price` TRRA to the seller.
-    pub fn buy_credit(ctx: Context<BuyCredit>) -> Result<()> {
+    /// Buy a listed credit. Buyer pays `price` TRRA to the seller, but never
+    /// more than `max_price`: a listing cancelled and re-listed at a higher
+    /// price between signing and execution makes the purchase fail instead.
+    pub fn buy_credit(ctx: Context<BuyCredit>, max_price: u64) -> Result<()> {
         let cfg = &ctx.accounts.config;
         require!(!cfg.paused, TerraError::Paused);
         require!(!ctx.accounts.listing.sold, TerraError::AlreadySold);
         require!(ctx.accounts.buyer.key() != ctx.accounts.listing.seller, TerraError::SelfPurchase);
         let price = ctx.accounts.listing.price;
+        require!(price <= max_price, TerraError::PriceAboveLimit);
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -233,9 +250,11 @@ pub struct Config {
     pub paused: bool,
     pub bump: u8,
     pub vault_bump: u8,
+    /// Proposed governance authority; `Pubkey::default()` when none is pending.
+    pub pending_governance: Pubkey,
 }
 impl Config {
-    pub const LEN: usize = 8 + (32 * 4) + (8 * 4) + (8 * 2) + 1 + 1 + 1;
+    pub const LEN: usize = 8 + (32 * 4) + (8 * 4) + (8 * 2) + 1 + 1 + 1 + 32;
 }
 
 #[account]
@@ -292,6 +311,16 @@ pub struct Initialize<'info> {
     pub vault: Account<'info, TokenAccount>,
     #[account(mut)]
     pub payer: Signer<'info>,
+    /// Only the program's upgrade authority may initialize. Without this check
+    /// whoever calls first after the deploy picks governance, oracle and mint
+    /// of the singleton config.
+    #[account(
+        seeds = [crate::ID.as_ref()],
+        bump,
+        seeds::program = anchor_lang::solana_program::bpf_loader_upgradeable::ID,
+        constraint = program_data.upgrade_authority_address == Some(payer.key()) @ TerraError::UnauthorizedInitializer,
+    )]
+    pub program_data: Account<'info, ProgramData>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -348,6 +377,19 @@ pub struct Govern<'info> {
 }
 
 #[derive(Accounts)]
+pub struct AcceptGovernance<'info> {
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        constraint = config.pending_governance != Pubkey::default() @ TerraError::NoPendingGovernance,
+        constraint = config.pending_governance == new_governance.key() @ TerraError::UnauthorizedGovernance,
+    )]
+    pub config: Account<'info, Config>,
+    pub new_governance: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct ListCredit<'info> {
     #[account(seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, Config>,
@@ -396,6 +438,8 @@ pub struct OracleRotated { pub new_oracle: Pubkey }
 #[event]
 pub struct PauseToggled { pub paused: bool }
 #[event]
+pub struct GovernanceProposed { pub proposed: Pubkey }
+#[event]
 pub struct GovernanceTransferred { pub new_governance: Pubkey }
 #[event]
 pub struct CreditListed { pub listing: Pubkey, pub seller: Pubkey, pub impact_index: u64, pub price: u64 }
@@ -436,4 +480,11 @@ pub enum TerraError {
     AlreadySold,
     #[msg("Seller cannot buy own listing")]
     SelfPurchase,
+    // New variants go at the end: error codes are 6000 + index.
+    #[msg("Listing price is above the buyer's limit")]
+    PriceAboveLimit,
+    #[msg("Only the program's upgrade authority may initialize")]
+    UnauthorizedInitializer,
+    #[msg("No governance transfer is pending")]
+    NoPendingGovernance,
 }

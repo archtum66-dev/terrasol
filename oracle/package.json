@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "description": "TerraSol Lean MVP - Verifizierung und On-Chain-Anker",
   "scripts": {
-    "test": "ts-node test-verify.ts && ts-node test-chain-memo.ts && ts-node test-pruefseite.ts",
+    "test": "ts-node test-verify.ts && ts-node test-haertung.ts && ts-node test-chain-memo.ts && ts-node test-pruefseite.ts",
+    "test:offline": "ts-node test-verify.ts && ts-node test-haertung.ts",
     "test:verify": "ts-node test-verify.ts",
+    "test:haertung": "ts-node test-haertung.ts",
     "test:anchor": "ts-node test-chain-memo.ts",
     "test:seite": "ts-node test-pruefseite.ts",
     "demo": "ts-node demo-daten.ts",
@@ -12,7 +14,7 @@
     "chain": "solana-test-validator --reset --quiet"
   },
   "author": "",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "type": "commonjs",
   "devDependencies": {
     "@types/node": "^26.1.1",

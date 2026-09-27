@@ -88,6 +88,15 @@ async function main() {
 
   const v = await verifyProof(connection, anchored.signature, hash);
   check("verifyProof confirms the match", v.match);
+  check("transaction succeeded", !read.failed);
+  check("fee payer is the anchoring key", read.feePayer === payer.publicKey.toBase58());
+
+  // Whoever did not pay for the anchor cannot be passed off as us.
+  const fremd = Keypair.generate().publicKey.toBase58();
+  const vs = await verifyProof(connection, anchored.signature, hash, [fremd]);
+  check("anchor by an untrusted key does not count", !vs.match);
+  const vo = await verifyProof(connection, anchored.signature, hash, [payer.publicKey.toBase58()]);
+  check("anchor by a trusted key counts", vo.match);
 
   // -- 4. The point of the whole exercise --------------------------------
   // One byte changed in the document. Nothing else.
