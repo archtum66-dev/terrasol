@@ -3,6 +3,8 @@ node_modules/
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
 schluessel.json
 token_*.json
 data/proofs.json
@@ -10,7 +12,20 @@ data/used-serials.json
 data/demo-ledger.json
 data/_test-*.json
 data/nachweis-*.bin
+data/*.lock
+data/*.tmp
 _bilder/
+
+# Schlüssel - nie ins öffentliche Repository, auch nicht aus Versehen.
+id.json
+*-keypair.json
+*keypair*.json
+*.pem
+*.key
+*.p12
+*.pfx
+.solana/
+test-ledger/
 
 # Die alte Website aus der Token-Zeit. Sie bleibt auf der Platte, gehoert
 # aber nicht ins oeffentliche Repository: agb.html, datenschutz.html und

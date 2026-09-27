@@ -14,6 +14,11 @@
 //!   Knoten liegen zusammenhängend im Speicher.
 //!
 //! Ergebnis: Einfügen, Ausführen und Stornieren sind konstante Operationen.
+//!
+//! Mengen werden nie still übergelaufen: Eine Order, deren Rest die Summe
+//! ihrer Preisstufe über `u64::MAX` heben würde, wird abgelehnt.
+
+use std::collections::VecDeque;
 
 pub const KEIN: u32 = u32::MAX;
 
@@ -83,7 +88,7 @@ struct Bitfeld {
 
 impl Bitfeld {
     fn neu(ticks: u32) -> Self {
-        Bitfeld { woerter: vec![0u64; (ticks as usize + 63) / 64] }
+        Bitfeld { woerter: vec![0u64; (ticks as usize).div_ceil(64)] }
     }
 
     #[inline(always)]
@@ -150,7 +155,11 @@ pub struct Orderbuch {
     frei: Vec<u32>,
     /// Order-Nummer -> Slot. Die Börse vergibt die Nummern selbst und
     /// fortlaufend, darum genügt ein Feld statt einer Streutabelle.
-    platz: Vec<u32>,
+    /// `platz[0]` gehört zu `platz_basis`; vorne erledigte Nummern werden
+    /// abgeschnitten, damit der Speicher im Dauerbetrieb nicht mit jeder je
+    /// vergebenen Nummer wächst, sondern nur mit dem Fenster der liegenden.
+    platz: VecDeque<u32>,
+    platz_basis: u64,
     naechste_oid: u64,
 
     bester_kauf: Option<u32>,
@@ -173,7 +182,8 @@ impl Orderbuch {
             verk_belegt: Bitfeld::neu(ticks),
             knoten: Vec::with_capacity(1 << 16),
             frei: Vec::with_capacity(1 << 12),
-            platz: Vec::with_capacity(1 << 16),
+            platz: VecDeque::with_capacity(1 << 16),
+            platz_basis: 1,
             naechste_oid: 1,
             bester_kauf: None,
             bester_verkauf: None,
@@ -224,11 +234,40 @@ impl Orderbuch {
 
     #[inline(always)]
     fn platz_setzen(&mut self, oid: u64, slot: u32) {
-        let i = oid as usize;
+        if self.platz.is_empty() {
+            self.platz_basis = oid;
+        }
+        // Nummern steigen streng, darum gilt hier immer oid >= platz_basis.
+        let i = (oid - self.platz_basis) as usize;
         if i >= self.platz.len() {
             self.platz.resize(i + 1, KEIN);
         }
         self.platz[i] = slot;
+    }
+
+    #[inline(always)]
+    fn platz_holen(&self, oid: u64) -> u32 {
+        if oid < self.platz_basis {
+            return KEIN;
+        }
+        let i = (oid - self.platz_basis) as usize;
+        self.platz.get(i).copied().unwrap_or(KEIN)
+    }
+
+    /// Eintrag löschen und erledigte Nummern vorne abschneiden.
+    #[inline(always)]
+    fn platz_loeschen(&mut self, oid: u64) {
+        let i = (oid - self.platz_basis) as usize;
+        self.platz[i] = KEIN;
+        while self.platz.front() == Some(&KEIN) {
+            self.platz.pop_front();
+            self.platz_basis += 1;
+        }
+    }
+
+    /// Einträge im Nummernfenster - für Tests der Speicherschranke.
+    pub fn platz_fenster(&self) -> usize {
+        self.platz.len()
     }
 
     // -- Order einreichen -------------------------------------------------
@@ -247,6 +286,12 @@ impl Orderbuch {
 
         // Nur-Legen: würde sie kreuzen, wird sie gar nicht erst angenommen.
         if gueltigkeit == Gueltigkeit::NurLegen && self.wuerde_kreuzen(kauf, tick) {
+            return Ergebnis { oid: None, ausgefuehrt: 0, ruhend: 0, abgelehnt: true };
+        }
+
+        // Ein Rest, der die Stufensumme überlaufen liesse, wird gar nicht erst
+        // angenommen. Der Rest ist höchstens `menge`, also genügt diese Probe.
+        if gueltigkeit != Gueltigkeit::Ioc && self.menge_auf(kauf, tick).checked_add(menge).is_none() {
             return Ergebnis { oid: None, ausgefuehrt: 0, ruhend: 0, abgelehnt: true };
         }
 
@@ -338,7 +383,8 @@ impl Orderbuch {
                     nehmer_kauft: kauf,
                 });
                 self.anzahl_ausfuehrungen += 1;
-                self.volumen += m;
+                // Reine Statistik: bleibt am Anschlag stehen statt umzubrechen.
+                self.volumen = self.volumen.saturating_add(m);
 
                 if self.knoten[kopf as usize].menge == 0 {
                     self.kopf_entfernen(kauf, stufe_tick);
@@ -391,7 +437,7 @@ impl Orderbuch {
             self.knoten[weiter as usize].zurueck = KEIN;
         }
         let oid = self.knoten[kopf as usize].oid;
-        self.platz[oid as usize] = KEIN;
+        self.platz_loeschen(oid);
         self.frei.push(kopf);
         self.ruhende_orders -= 1;
     }
@@ -439,12 +485,12 @@ impl Orderbuch {
         if war_leer {
             if kauf {
                 self.kauf_belegt.setzen(tick);
-                if self.bester_kauf.map_or(true, |b| tick > b) {
+                if self.bester_kauf.is_none_or(|b| tick > b) {
                     self.bester_kauf = Some(tick);
                 }
             } else {
                 self.verk_belegt.setzen(tick);
-                if self.bester_verkauf.map_or(true, |b| tick < b) {
+                if self.bester_verkauf.is_none_or(|b| tick < b) {
                     self.bester_verkauf = Some(tick);
                 }
             }
@@ -455,11 +501,7 @@ impl Orderbuch {
     /// Gibt die stornierte Restmenge zurück, oder None, wenn es die Order
     /// nicht (mehr) gibt.
     pub fn stornieren(&mut self, oid: u64) -> Option<u64> {
-        let i = oid as usize;
-        if i >= self.platz.len() {
-            return None;
-        }
-        let slot = self.platz[i];
+        let slot = self.platz_holen(oid);
         if slot == KEIN {
             return None;
         }
@@ -488,7 +530,7 @@ impl Orderbuch {
         stufe.summe -= menge;
         let jetzt_leer = stufe.ist_leer();
 
-        self.platz[i] = KEIN;
+        self.platz_loeschen(oid);
         self.frei.push(slot);
         self.ruhende_orders -= 1;
 
@@ -515,8 +557,7 @@ impl Orderbuch {
 
     /// Liegt diese Order noch im Buch?
     pub fn liegt(&self, oid: u64) -> bool {
-        let i = oid as usize;
-        i < self.platz.len() && self.platz[i] != KEIN
+        self.platz_holen(oid) != KEIN
     }
 }
 
@@ -689,5 +730,44 @@ mod tests {
         if let (Some(k), Some(v)) = (b.bester_kauf(), b.bester_verkauf()) {
             assert!(k < v, "gekreuztes Buch: {k} >= {v}");
         }
+    }
+
+    #[test]
+    fn stufensumme_laeuft_nie_ueber() {
+        let (mut b, mut a) = buch();
+        let gross = u64::MAX / 2 + 1;
+        assert!(!b.limit(false, 100, gross, Gueltigkeit::Gtc, &mut a).abgelehnt);
+        let e = b.limit(false, 100, gross, Gueltigkeit::Gtc, &mut a);
+        assert!(e.abgelehnt, "würde die Stufensumme überlaufen lassen");
+        assert_eq!(b.menge_auf(false, 100), gross, "Buch unverändert");
+        // Eine IOC legt nie etwas hin und darf darum nehmen.
+        let k = b.limit(true, 100, u64::MAX, Gueltigkeit::Ioc, &mut a);
+        assert_eq!(k.ausgefuehrt, gross);
+        assert_eq!(b.menge_auf(false, 100), 0);
+    }
+
+    #[test]
+    fn nummernfenster_bleibt_klein() {
+        // Eine Million Orders, die kommen und gehen: das Fenster darf nicht
+        // mit jeder je vergebenen Nummer wachsen.
+        let (mut b, mut a) = buch();
+        for _ in 0..1_000_000 {
+            let e = b.limit(true, 100, 1, Gueltigkeit::Gtc, &mut a);
+            b.stornieren(e.oid.unwrap());
+        }
+        assert_eq!(b.platz_fenster(), 0);
+        assert_eq!(b.ruhende_orders, 0);
+
+        // Eine alte, liegende Order hält das Fenster offen - korrekt.
+        let alt = b.limit(true, 50, 1, Gueltigkeit::Gtc, &mut a).oid.unwrap();
+        for _ in 0..1_000 {
+            let e = b.limit(true, 100, 1, Gueltigkeit::Gtc, &mut a);
+            b.stornieren(e.oid.unwrap());
+        }
+        assert!(b.liegt(alt));
+        assert_eq!(b.stornieren(alt), Some(1));
+        assert_eq!(b.platz_fenster(), 0);
+        assert!(!b.liegt(alt));
+        assert_eq!(b.stornieren(alt), None);
     }
 }

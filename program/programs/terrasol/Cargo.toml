@@ -3,6 +3,7 @@ name = "terrasol"
 version = "0.1.0"
 description = "TerraSol utility + proof-of-impact program"
 edition = "2021"
+license = "Apache-2.0"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -19,3 +20,17 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 [dependencies]
 anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
 anchor-spl = "0.30.1"
+
+# Native tests against the real Solana runtime (bank + SPL Token), with a
+# controllable clock - the only way to test unstake after the 7-day lock.
+# solana-* pinned to the version anchor 0.30.1 builds on.
+[dev-dependencies]
+bincode = "1"
+solana-program-test = "=1.18.26"
+solana-sdk = "=1.18.26"
+spl-token = { version = "4", features = ["no-entrypoint"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# Anchor 0.30.1 macros emit cfgs the compiler does not know about.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("anchor-debug", "custom-heap", "custom-panic"))', 'cfg(target_os, values("solana"))'] }

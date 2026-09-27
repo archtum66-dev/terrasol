@@ -77,7 +77,7 @@ body{background:var(--bg);color:var(--text);
 <div class="blatt">
 
   <div class="kopf">
-    <img src="/trra-64.png" alt="" onerror="this.style.display='none'">
+    <img src="/trra-64.png" alt="" id="logo">
     <h1>Nachweis prüfen
       <span>TerraSol — unabhängige CO₂-Verifizierung</span></h1>
   </div>
@@ -125,88 +125,7 @@ body{background:var(--bg);color:var(--text);
 
 </div>
 
-<script>
-const ablage = document.getElementById('ablage');
-const datei  = document.getElementById('datei');
-const lauf   = document.getElementById('lauf');
-const kasten = document.getElementById('ergebnis');
-const titel  = document.getElementById('titel');
-const text   = document.getElementById('text');
-const daten  = document.getElementById('daten');
-
-['dragenter','dragover'].forEach(e =>
-  ablage.addEventListener(e, ev => { ev.preventDefault(); ablage.classList.add('drueber'); }));
-['dragleave','drop'].forEach(e =>
-  ablage.addEventListener(e, ev => { ev.preventDefault(); ablage.classList.remove('drueber'); }));
-ablage.addEventListener('drop', ev => {
-  const f = ev.dataTransfer.files[0];
-  if (f) pruefen(f);
-});
-datei.addEventListener('change', () => { if (datei.files[0]) pruefen(datei.files[0]); });
-
-/** SHA-256 im Browser. Das Dokument bleibt hier. */
-async function fingerabdruck(file) {
-  const puffer = await file.arrayBuffer();
-  const roh = await crypto.subtle.digest('SHA-256', puffer);
-  return Array.from(new Uint8Array(roh))
-    .map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function zeigen(art, kopf, inhalt, felder) {
-  lauf.classList.remove('zeigen');
-  kasten.className = 'ergebnis zeigen ' + art;
-  titel.textContent = kopf;
-  text.textContent = inhalt;
-  daten.innerHTML = felder.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
-}
-
-async function pruefen(file) {
-  kasten.classList.remove('zeigen');
-  lauf.classList.add('zeigen');
-
-  const hash = await fingerabdruck(file);
-  let a;
-  try {
-    a = await (await fetch('/api/pruefen?hash=' + hash)).json();
-  } catch (e) {
-    zeigen('gelb', '⚠ Prüfung nicht möglich',
-      'Der Prüfdienst ist nicht erreichbar. Bitte später erneut versuchen.',
-      [['Fingerabdruck', hash]]);
-    return;
-  }
-
-  const groesse = file.size < 1024 ? file.size + ' Bytes'
-    : file.size < 1048576 ? (file.size / 1024).toFixed(1) + ' kB'
-    : (file.size / 1048576).toFixed(1) + ' MB';
-
-  if (a.status === 'registriert') {
-    const zeit = a.blockTime
-      ? new Date(a.blockTime * 1000).toLocaleString('de-CH',
-          { dateStyle: 'long', timeStyle: 'short' })
-      : 'unbekannt';
-    zeigen('gruen', '✓ Registriert und unverändert',
-      'Dieses Dokument wurde bei uns registriert und ist seither Byte für Byte unverändert.',
-      [
-        ['Datei', file.name + ' · ' + groesse],
-        ['Registriert am', zeit],
-        ['Fingerabdruck', hash],
-        ['Beleg auf der Kette', a.explorer
-          ? `<a href="${a.explorer}" target="_blank" rel="noopener">${a.signature}</a>`
-          : a.signature],
-      ]);
-  } else if (a.status === 'abweichung') {
-    zeigen('rot', '✗ Verändert',
-      'Zu diesem Dokument gibt es einen Eintrag, aber der Fingerabdruck stimmt '
-      + 'nicht mehr überein. Das Dokument wurde nach der Registrierung geändert.',
-      [['Datei', file.name + ' · ' + groesse], ['Fingerabdruck', hash]]);
-  } else {
-    zeigen('rot', '✗ Nicht registriert',
-      'Für dieses Dokument gibt es keinen Eintrag. Entweder wurde es nie '
-      + 'registriert — oder es wurde nach der Registrierung verändert. Beides '
-      + 'ist von aussen nicht unterscheidbar.',
-      [['Datei', file.name + ' · ' + groesse], ['Fingerabdruck', hash]]);
-  }
-}
-</script>
+<!-- Logik in pruefen.js: erlaubt eine strikte Content-Security-Policy. -->
+<script src="/pruefen.js" defer></script>
 </body>
 </html>

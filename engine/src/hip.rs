@@ -38,6 +38,7 @@ pub enum Beanstandung {
     NameZuLang(usize),
     NameLeer,
     DezimalenAbstand { wei: u8, sz: u8 },
+    LosZuGross,
     MengeNull,
     MengeNichtDurchLos,
 }
@@ -57,17 +58,22 @@ impl TokenBeschrieb {
         } else if laenge > 6 {
             fehler.push(Beanstandung::NameZuLang(laenge));
         }
-        if self.sz_dezimalen + 5 > self.wei_dezimalen {
+        // In u16 gerechnet: sz + 5 darf bei grossen Eingaben nicht überlaufen.
+        let abstand_ok = self.sz_dezimalen as u16 + 5 <= self.wei_dezimalen as u16;
+        if !abstand_ok {
             fehler.push(Beanstandung::DezimalenAbstand {
                 wei: self.wei_dezimalen,
                 sz: self.sz_dezimalen,
             });
         }
+        // 10^39 passt nicht mehr in u128 - die Losgrösse wäre nicht darstellbar.
+        let los_darstellbar = abstand_ok && self.wei_dezimalen - self.sz_dezimalen <= 38;
+        if abstand_ok && !los_darstellbar {
+            fehler.push(Beanstandung::LosZuGross);
+        }
         if self.max_menge_wei == 0 {
             fehler.push(Beanstandung::MengeNull);
-        } else if self.sz_dezimalen + 5 <= self.wei_dezimalen
-            && self.max_menge_wei % self.los_groesse() != 0
-        {
+        } else if los_darstellbar && !self.max_menge_wei.is_multiple_of(self.los_groesse()) {
             fehler.push(Beanstandung::MengeNichtDurchLos);
         }
         if fehler.is_empty() { Ok(()) } else { Err(fehler) }
@@ -176,7 +182,11 @@ impl Hyperliquiditaet {
         for i in 0..n_orders {
             if i > 0 {
                 // round(p * 1.003) in Ganzzahlen - kein Fliesskomma im Kern.
-                p = (p * SCHRITT_PROMILLE + 500) / 1000;
+                p = p
+                    .checked_mul(SCHRITT_PROMILLE)
+                    .and_then(|x| x.checked_add(500))
+                    .expect("Leiterpreis ausserhalb von u64")
+                    / 1000;
                 if p <= preise[(i - 1) as usize] {
                     p = preise[(i - 1) as usize] + 1; // bei winzigen Preisen
                 }
@@ -185,12 +195,21 @@ impl Hyperliquiditaet {
         }
 
         let n = n_orders as usize;
+        // Token für alle Verkaufsstufen, USDC für alle Kaufstufen. Ohne das
+        // Quote-Guthaben würde die Leiter Kaufaufträge stellen, die sie gar
+        // nicht bezahlen kann - die Buchhaltung ginge sofort ins Minus.
+        let basis_bestand = ((n_orders - n_gesaet) as u64)
+            .checked_mul(order_groesse)
+            .expect("Basisbestand ausserhalb von u64");
+        let quote_bestand: u128 = preise[..n_gesaet as usize]
+            .iter()
+            .map(|p| *p as u128 * order_groesse as u128)
+            .sum();
         Hyperliquiditaet {
             preise,
             order_groesse,
-            // Token für alle Verkaufsstufen, USDC für alle Kaufstufen.
-            basis_bestand: (n_orders - n_gesaet) as u64 * order_groesse,
-            quote_bestand: 0,
+            basis_bestand,
+            quote_bestand,
             liegend: vec![None; n],
             ist_kauf: (0..n).map(|i| (i as u32) < n_gesaet).collect(),
             letzte_aktualisierung: 0,
@@ -234,8 +253,13 @@ impl Hyperliquiditaet {
         }
         let preis = self.preise[i];
         let kauf = self.ist_kauf[i];
+        // Ein Preis jenseits von u32 hat keinen Tick im Buch. Abschneiden
+        // (`as u32`) würde die Stufe zu einem falschen Preis legen.
+        let Ok(tick) = u32::try_from(preis) else {
+            return;
+        };
         // Nur legen, nie nehmen: Das Protokoll ist immer Market Maker.
-        let e = buch.limit(kauf, preis as u32, self.order_groesse, Gueltigkeit::NurLegen, aus);
+        let e = buch.limit(kauf, tick, self.order_groesse, Gueltigkeit::NurLegen, aus);
         self.liegend[i] = e.oid;
     }
 
@@ -252,8 +276,9 @@ impl Hyperliquiditaet {
         };
         if self.ist_kauf[i] {
             // Wir haben gekauft: Token rein, USDC raus.
-            self.basis_bestand += a.menge;
+            self.basis_bestand = self.basis_bestand.saturating_add(a.menge);
             let kosten = a.menge as u128 * self.preise[i] as u128;
+            debug_assert!(self.quote_bestand >= kosten, "Kaufstufe ohne Deckung");
             self.quote_bestand = self.quote_bestand.saturating_sub(kosten);
         } else {
             // Wir haben verkauft: Token raus, USDC rein.
@@ -326,6 +351,20 @@ mod tests {
             .pruefen()
             .unwrap_err()
             .contains(&Beanstandung::DezimalenAbstand { wei: 6, sz: 2 }));
+
+        // Extreme Eingaben: Beanstandung statt Überlauf oder Panik.
+        let riesig = TokenBeschrieb { wei_dezimalen: 255, sz_dezimalen: 251, ..gut.clone() };
+        assert!(riesig.pruefen().is_err());
+        let los = TokenBeschrieb { wei_dezimalen: 60, sz_dezimalen: 0, ..gut.clone() };
+        assert!(los.pruefen().unwrap_err().contains(&Beanstandung::LosZuGross));
+    }
+
+    #[test]
+    fn leiter_ist_von_anfang_an_gedeckt() {
+        // Zwei Kaufstufen zu 10'000 und 10'030 à 100 Lose brauchen Quote.
+        let h = Hyperliquiditaet::neu(10_000, 5, 100, 2);
+        assert_eq!(h.quote_bestand, 100 * 10_000 + 100 * 10_030);
+        assert_eq!(h.basis_bestand, 3 * 100);
     }
 
     #[test]

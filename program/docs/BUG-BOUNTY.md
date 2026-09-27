@@ -2,7 +2,7 @@
 
 ## Platform
 List on Immunefi (or similar) once audited. Keep a self-hosted fallback at
-hello@terrasols.org.
+kontakt@terrasols.org (subject "Sicherheit"), the same address as in `SECURITY.md`.
 
 ## Severity & reward guide (USD, illustrative)
 | Severity | Example | Reward range |
